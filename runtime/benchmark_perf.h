@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__linux__) && !defined(__ANDROID__))
 #include <stdatomic.h>
 extern bool g_benchmark;
 enum { BP_BUILDS, BP_BUILD_NS, BP_BUILD_WAIT_NS, BP_GPU_WAIT_NS, BP_TEX_NS, BP_TEX_BYTES,

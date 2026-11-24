@@ -28,8 +28,8 @@ void vk_device_fault_report(void);
 #ifdef __ANDROID__
 void vk_android_load(void);  // android_driver.c: the Vulkan driver (adrenotools / system) into volk
 const char *vk_driver_rejected(void);  // (the chosen driver package the system's stood in for; "" none)
-void vk_wait_ready(void);    // device.c: until the device exists (the window's thread makes it)
 #endif
+void vk_wait_ready(void);    // device.c: until the device exists (the window's thread makes it)
 #define VK_CHECK(x) do { VkResult r_ = (x); if (r_ != VK_SUCCESS) { if (r_ == VK_ERROR_DEVICE_LOST) vk_device_fault_report(); \
     FATAL("%s failed: %d (%s:%d)\n", #x, r_, __FILE__, __LINE__); } } while (0)
 // The most swapchain images the renderer keeps (one view and one present semaphore each): it asks for few, but drivers
@@ -56,7 +56,7 @@ typedef struct {
     bool eds2;                    // extended dynamic state 2 in use; without it, depth bias and primitive restart are
                                   // pipeline state (exec.c PipeKey.prim_restart)
     bool dyn_vi;                  // VK_EXT_vertex_input_dynamic_state in use: vertex attributes/bindings set dynamically
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__linux__) && !defined(__ANDROID__))
     bool map_placed;              // VK_EXT_map_memory_placed: the guest heap mapped as GPU memory (exec.c vk_heap_place)
     bool mem_fd;                  // VK_KHR_external_memory_fd: the same through an exported file mapped there (vk_heap_place)
     bool mem_dmabuf;              // VK_EXT_external_memory_dma_buf: that file as a dma-buf, when the opaque one won't do

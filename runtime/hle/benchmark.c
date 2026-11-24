@@ -25,7 +25,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#ifdef __ANDROID__
 #include <sys/system_properties.h>
+#else
+#define PROP_VALUE_MAX 92
+static int __system_property_get(const char *name, char *value) { (void)name; (void)value; return 0; }
+#endif
 #include <unistd.h>
 
 #include "../benchmark_perf.h"
@@ -33,7 +38,11 @@
 #include "../framepace.h"
 #include "../rt.h"
 #include "../settings.h"
+#if __has_include("benchmark_commit.h")
 #include "benchmark_commit.h"
+#else
+#define BENCHMARK_COMMIT "standalone"
+#endif
 
 #define GA(a) ((uint64_t)(a) - 0x7000000000ull + GUEST_LO)
 #define RD8(a) (*(volatile uint8_t *)(uintptr_t)(a))

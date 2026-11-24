@@ -21,3 +21,17 @@ tools/venv/
 venv/
 __pycache__/
 .DS_Store
+
+# local data/build trees and symlinks of the Linux port
+/v190
+/extracted
+/generated
+/game_version.txt
+/cache
+/tools/venv
+/v160
+/v182
+/generated-*
+/deps
+/build
+benchmark_commit.h

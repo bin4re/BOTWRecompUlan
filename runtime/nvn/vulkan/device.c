@@ -422,7 +422,13 @@ static void pick_device(void) {
     }
     free(qp);
     if (g_vk.qfam == UINT32_MAX) FATAL("no graphics+present queue\n");
-    LOG("[vk] using %s\n", g_vk.props.deviceName);
+    // The desktop port: the Android branch negotiates 1.1 / 1.2 with extensions; a desktop driver is asked for 1.3
+    // (pick_device skips anything older), and the device must be created as one - api 0 asked for Vulkan 1.0, which
+    // silently dropped every 1.3 path (dynamic rendering, synchronization2, extended dynamic state).
+    uint32_t api = g_vk.props.apiVersion < VK_API_VERSION_1_3 ? g_vk.props.apiVersion : VK_API_VERSION_1_3;
+    g_vk.api = VK_MAKE_API_VERSION(0, VK_API_VERSION_MAJOR(api), VK_API_VERSION_MINOR(api), 0);
+    LOG("[vk] using %s (Vulkan %u.%u)\n", g_vk.props.deviceName, VK_API_VERSION_MAJOR(g_vk.api),
+        VK_API_VERSION_MINOR(g_vk.api));
 }
 #endif
 
@@ -621,6 +627,27 @@ static void create_device(void) {
     bool robustness2 = has_ext(ep, ne, VK_EXT_ROBUSTNESS_2_EXTENSION_NAME) && !env_on("LARECOMP_NO_ROBUSTNESS2");
     bool have_dyn_vi = has_ext(ep, ne, VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
 #endif
+
+#if defined(__linux__) && !defined(__ANDROID__)
+    // The desktop port: the same exported-file guest heap the Android build uses on Mali/Xclipse, decided here by what
+    // the driver offers. PanVK (Mesa 26) has VK_KHR_external_memory_fd + VK_EXT_external_memory_dma_buf but neither the
+    // host import nor placed maps, so exec.c vk_heap_place takes the exported-file path (measured on a Mali-G610).
+    g_vk.mem_fd = has_ext(ep, ne, VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME) &&
+                  (g_vk.api >= VK_API_VERSION_1_1 || has_ext(ep, ne, VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME));
+    if (g_vk.mem_fd) ext[n_ext++] = VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME;
+    g_vk.mem_dmabuf = g_vk.mem_fd && has_ext(ep, ne, VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME);
+    if (g_vk.mem_dmabuf) ext[n_ext++] = VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME;
+    g_vk.map_placed = has_ext(ep, ne, VK_EXT_MAP_MEMORY_PLACED_EXTENSION_NAME) && has_ext(ep, ne, VK_KHR_MAP_MEMORY_2_EXTENSION_NAME);
+    if (g_vk.map_placed) {
+        ext[n_ext++] = VK_KHR_MAP_MEMORY_2_EXTENSION_NAME;
+        ext[n_ext++] = VK_EXT_MAP_MEMORY_PLACED_EXTENSION_NAME;
+    }
+    LOG("[vk-cap] memory export: fd %s, dma-buf %s, placed maps %s, host import %s (api %u.%u)\n",
+        g_vk.mem_fd ? "yes" : "no", g_vk.mem_dmabuf ? "yes" : "no", g_vk.map_placed ? "yes" : "no",
+        has_ext(ep, ne, VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME) ? "yes" : "no",
+        VK_API_VERSION_MAJOR(g_vk.api), VK_API_VERSION_MINOR(g_vk.api));
+    bool robustness2 = false;  // (frame generation's null descriptors: not wired up in the desktop port yet)
+#endif
     free(ep);
 
     // features the backend relies on (all present on current desktop drivers)
@@ -733,6 +760,25 @@ static void create_device(void) {
     if (missing) FATAL("%sVulkan driver on %s lacks a feature required by this renderer: %s. " DRIVER_HINT "\n"
                        "Driver: %s. Include this message, phone model and app version in your bug report.\n",
                        rejected_note(), g_vk.props.deviceName, missing, driver.driverName);
+#else
+    // Desktop Linux: the device is a Vulkan 1.3 one, so its 1.3 core features are on (the Android branch above asks per
+    // extension because phones may be 1.1 / 1.2). LARECOMP_VK_LEGACY=1: the old behaviour (a Vulkan 1.0 device and
+    // classic render passes), to A/B the two paths on one binary.
+    if (!getenv("LARECOMP_VK13")) {
+        // Measured on a Mali-G610 / PanVK 26.0.8: the 1.3 path (dynamic rendering, sync2, extended dynamic state) costs
+        // ~50% more render-thread time than the classic one (11.9 vs 15.2 fps at the same spot), so it stays off unless
+        // asked for (LARECOMP_VK13=1), to re-test with a newer Mesa.
+        g_vk.api = VK_MAKE_API_VERSION(0, 1, 0, 0);
+        g_vk.sync2 = g_vk.eds = g_vk.eds2 = g_vk.dyn_render = false;
+        LOG("[vk] Vulkan 1.0 paths, classic render passes (LARECOMP_VK13=1: the 1.3 ones)\n");
+    } else {
+        g_vk.sync2 = true;
+        g_vk.eds = true;
+        g_vk.eds2 = true;
+        g_vk.dyn_render = true;
+        LOG("[vk] Vulkan %u.%u core: dynamic rendering, synchronization2, extended dynamic state 1/2 on\n",
+            VK_API_VERSION_MAJOR(g_vk.api), VK_API_VERSION_MINOR(g_vk.api));
+    }
 #endif
     VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT div = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES_EXT,
@@ -2405,7 +2451,7 @@ void backend_clear_window(void) {
     if (g_vk.dev && vk_frame_begin(black)) vk_frame_end(NULL);
 }
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__linux__) && !defined(__ANDROID__))
 void vk_wait_ready(void) {
     while (!atomic_load(&ui_ready)) SDL_Delay(1);
 }

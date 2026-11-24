@@ -44,7 +44,7 @@ typedef struct {
     int pad_gyro_axes;    // a controller's gyroscope axis order: 0 as reported, 1 y,x,z, 2 z,y,x, 3 x,z,y (hle/motion.c, #511)
     bool lsfg; int lsfg_mult, lsfg_flow;  // frame generation (vulkan/lsfg): on, frames per game frame 2..4, motion resolution % (0: the game's)
     bool motion_flat;     // the phone's sensors as the Switch's screen in handheld mode, not a flat controller (hle/motion.c)
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__linux__) && !defined(__ANDROID__))  // LAS_LINUX: the desktop port shares these
     bool touch_controls;  // on-screen controls while no controller is connected (ui/touch_controls.mm)
     int overlay_style;    // Show FPS's overlay (ui/perf_overlay.mm): 0 full, 1 compact (one line)
     int overlay_scale, overlay_opacity;  // its size and opacity, % (40..150, 20..100)

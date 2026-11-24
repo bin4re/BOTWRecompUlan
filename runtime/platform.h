@@ -73,7 +73,7 @@ void plat_crash_handler_install(void);  // per thread where the OS needs it (alt
 bool rt_fault_watch(uint64_t fault_addr, uint64_t host_pc);
 void rt_fault_report(const char *what, uint64_t fault_addr, uint64_t host_pc, uint64_t host_lr) __attribute__((noreturn));
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__linux__) && !defined(__ANDROID__))
 // ---- device state for the performance overlay (runtime/ui/perf_overlay.mm); -1 / 0 where unknown
 typedef struct {
     int ncluster;                  // CPU clusters (cpufreq policies)
