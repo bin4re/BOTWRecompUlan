@@ -1,3 +1,6 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 // Executes recorded NVN command lists with Vulkan (port of renderer.m; same structure, same behaviour).
 #include <SDL3/SDL_cpuinfo.h>
 #ifdef __ANDROID__
@@ -16,8 +19,13 @@
 #include <time.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(__linux__) && !defined(__ANDROID__)  // (mman: the exported-file heap)
 #include <sys/mman.h>
+#if defined(__linux__) && !defined(__ANDROID__)
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <linux/udmabuf.h>
+#endif
 #endif
 
 #include "../../benchmark_perf.h"
@@ -42,6 +50,7 @@ typedef VkSpan CbwinSpan;
 #define MW_TRANSLATOR_ID "unknown"
 #endif
 #define MW_META_BUILD_ID BENCHMARK_COMMIT ":" MW_TRANSLATOR_ID
+uint64_t renderer_present_count(void);  // (before its uses: clang 21 rejects the implicit declaration)
 #include "buffer_copy.h"
 #include "timing_trace.h"
 #include "object_cache.h"
@@ -303,9 +312,9 @@ static void wait_account(uint64_t ns) {
 static void cq_resolve_done(uint64_t done);
 static void wb_apply(uint64_t done);
 
-#ifdef __ANDROID__
-static _Atomic bool gcopy_mode;   // (no heap import: global memory copied by the CPU, gcopy_prepare)
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__linux__) && !defined(__ANDROID__))  // (gcopy_mode: the desktop port has it too)
+static bool gcopy_mode;   // (no heap import: global memory copied by the CPU, gcopy_prepare)
+#if defined(__ANDROID__) || (defined(__linux__) && !defined(__ANDROID__))
 static bool gwin_mode;    // (heap placed, larger than a storage buffer reaches: draws get a window of it, gwin_prepare)
 #endif
 static VkSpan gc_span;    // this draw's / dispatch's copy, gc_size bytes (0: none)
@@ -3361,7 +3370,7 @@ static bool qcom_no_switch(void) {
     return qcom_switch_cached;
 }
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__linux__) && !defined(__ANDROID__))
 static bool cbwin_wanted(void);  // (below gmem_placed)
 #endif
 
@@ -5464,8 +5473,10 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
 static VkBuffer gmem_buf;
 static VkDeviceMemory gmem_mem;
 static uint64_t gmem_size;
+#if defined(__ANDROID__) || (defined(__linux__) && !defined(__ANDROID__))
+static bool gmem_placed;  // (gmem_buf is the guest heap itself, usable as a uniform buffer: vk_heap_place)
+#endif
 #ifdef __ANDROID__
-static _Atomic bool gmem_placed;  // (gmem_buf is the guest heap itself, usable as a uniform buffer: vk_heap_place)
 
 static bool ubo_direct(uint64_t addr, uint64_t size, VkDescriptorBufferInfo *out) {
     static int on = -1;
@@ -5637,7 +5648,7 @@ static bool gmem_import(uint64_t size) {
 
 static uint64_t gmem_tried;  // heap size the import was last attempted for (gmem_info imports / re-imports)
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__linux__) && !defined(__ANDROID__))  // the desktop port uses the exported-file heap
 // Turnip (VK_EXT_map_memory_placed): the guest heap *is* GPU memory. When the game sets its heap size (kernel.c
 // SetHeapSize, before it writes there), host-visible device memory is mapped over the heap's range at HEAP_BASE itself
 // (replacing the window's anonymous pages) and becomes the global memory buffer: shaders read and write the guest's
@@ -5662,14 +5673,102 @@ bool vk_heap_file_asked(void) {
     return g_vk.mem_fd && (e ? atoi(e) != 0 : g_settings.heap_file);
 }
 
+#if defined(__linux__) && !defined(__ANDROID__)
+// The guest heap as ordinary cacheable RAM shared with the GPU through udmabuf: an anonymous memfd is mapped at
+// HEAP_BASE (the CPU side: normal zeroed pages - LSE atomics and unaligned stores work), and the same pages are handed
+// to Vulkan as a dma-buf to import. The other direction (exporting the driver's memory, below) gives an uncached map on
+// panthor, where the game's atomics faulted with SIGBUS; this one does not.
+static bool vk_heap_udmabuf(uint64_t size) {
+    int mfd = memfd_create("botw-heap", MFD_ALLOW_SEALING | MFD_CLOEXEC);
+    if (mfd < 0) { LOG("[vk] udmabuf heap: memfd_create failed (%s)\n", strerror(errno)); return false; }
+    if (ftruncate(mfd, (off_t)size) != 0) { LOG("[vk] udmabuf heap: ftruncate failed (%s)\n", strerror(errno)); close(mfd); return false; }
+    fcntl(mfd, F_ADD_SEALS, F_SEAL_SHRINK);
+    void *p = mmap((void *)(uintptr_t)HEAP_BASE, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, mfd, 0);
+    if (p != (void *)(uintptr_t)HEAP_BASE) {
+        LOG("[vk] udmabuf heap: mmap at %llx failed (%s)\n", (unsigned long long)HEAP_BASE, strerror(errno));
+        if (p != MAP_FAILED) munmap(p, size);
+        close(mfd);
+        return false;
+    }
+    int ud = open("/dev/udmabuf", O_RDWR | O_CLOEXEC);
+    if (ud < 0) {
+        LOG("[vk] udmabuf heap: /dev/udmabuf unavailable (%s)\n", strerror(errno));
+        munmap(p, size); close(mfd); return false;
+    }
+    struct udmabuf_create c = { .memfd = (uint32_t)mfd, .flags = 0, .offset = 0, .size = size };
+    int db = ioctl(ud, UDMABUF_CREATE, &c);
+    close(ud);
+    if (db < 0) {
+        LOG("[vk] udmabuf heap: UDMABUF_CREATE failed (%s)\n", strerror(errno));
+        munmap(p, size); close(mfd); return false;
+    }
+    VkExternalMemoryBufferCreateInfo ebi = {.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO,
+                                            .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT};
+    VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .pNext = &ebi, .size = size,
+                             .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                                      VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+                                      VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT};
+    VkBuffer buf;
+    if (vkCreateBuffer(g_vk.dev, &bi, NULL, &buf) != VK_SUCCESS) {
+        LOG("[vk] udmabuf heap: the %llu MB buffer refused\n", (unsigned long long)(size >> 20));
+        close(db); munmap(p, size); close(mfd); return false;
+    }
+    VkMemoryRequirements mr; vkGetBufferMemoryRequirements(g_vk.dev, buf, &mr);
+    VkPhysicalDeviceMemoryProperties mp; vkGetPhysicalDeviceMemoryProperties(g_vk.phys, &mp);
+    VkDeviceMemory mem = VK_NULL_HANDLE; int type = -1;
+    {   // LARECOMP_VK_UDMABUF_TYPE=<n>: force one memory type; LARECOMP_VK_UDMABUF_NODED=1: no dedicated allocation
+        const char *te = getenv("LARECOMP_VK_UDMABUF_TYPE");
+        int force_type = te ? atoi(te) : -1;
+        const char *ne = getenv("LARECOMP_VK_UDMABUF_NODED");
+        bool no_ded = ne && atoi(ne) != 0;
+    if (mr.size <= size) {
+        for (uint32_t t = 0; t < mp.memoryTypeCount && mem == VK_NULL_HANDLE; t++) {
+            if (!(mr.memoryTypeBits & (1u << t))) continue;
+            if (force_type >= 0 && (uint32_t)force_type != t) continue;
+            int fd2 = dup(db);
+            if (fd2 < 0) break;
+            VkImportMemoryFdInfoKHR imp = {.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR,
+                                           .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, .fd = fd2};
+            VkMemoryDedicatedAllocateInfo ded = {.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
+                                                 .buffer = buf};
+            if (!no_ded) imp.pNext = &ded;
+            VkMemoryAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .pNext = &imp,
+                                       .allocationSize = mr.size, .memoryTypeIndex = t};
+            VkResult r = vkAllocateMemory(g_vk.dev, &ai, NULL, &mem);
+            if (r == VK_SUCCESS) { type = (int)t; LOG("[vk] udmabuf heap: type %u%s\n", t, no_ded ? ", no dedicated" : ""); }
+            else close(fd2);  // (Vulkan took fd2 only on success)
+        }
+    } else {
+        LOG("[vk] udmabuf heap: the buffer wants %llu MB, the file is %llu MB\n",
+            (unsigned long long)(mr.size >> 20), (unsigned long long)(size >> 20));
+    }
+    close(db);
+    if (mem == VK_NULL_HANDLE || vkBindBufferMemory(g_vk.dev, buf, mem, 0) != VK_SUCCESS) {
+        LOG("[vk] udmabuf heap: import failed (types 0x%x)\n", mr.memoryTypeBits);
+        if (mem) vkFreeMemory(g_vk.dev, mem, NULL);
+        vkDestroyBuffer(g_vk.dev, buf, NULL);
+        munmap(p, size); close(mfd);
+        return false;
+    }
+    gmem_buf = buf; gmem_mem = mem; gmem_size = size;
+    gmem_placed = true; gcopy_mode = false;
+    gwin_mode = size > g_vk.props.limits.maxStorageBufferRange && !getenv("LARECOMP_VK_NO_GWIN");
+    LOG("[vk] guest heap %llu MB is GPU memory (memfd+udmabuf at %llx, memory type %d, flags 0x%x, storage range %llu MB)%s\n",
+        (unsigned long long)(size >> 20), (unsigned long long)HEAP_BASE, type, (unsigned)mp.memoryTypes[type].propertyFlags,
+        (unsigned long long)(g_vk.props.limits.maxStorageBufferRange >> 20), gwin_mode ? "; draws reach global memory through windows" : "");
+    return true;
+    }
+}
+#endif
+
 bool vk_heap_place(uint64_t size) {
 #ifdef __ANDROID__
     extern void vk_async_drain(void);
     vk_async_drain();  // (the render thread idle: vulkan/async.c)
 #endif
-    if (!size) return false;
+    if (!size) { LOG("[vk] heap placement: no size\n"); return false; }
     vk_wait_ready();
-    if (gmem_buf) return true;
+    if (gmem_buf) { LOG("[vk] heap placement: already placed\n"); return true; }
     // Not placed: the heap stays CPU memory copied for the GPU, and the vertex cache and the texture checks need the
     // OS's write tracking - vk_exec_init turns it on only without placed memory at all, so a Turnip that has it but
     // isn't an Adreno 8xx (Automatic) had neither: every vertex and index buffer copied each frame, ~150 MB, 7-9 fps
@@ -5687,9 +5786,11 @@ bool vk_heap_place(uint64_t size) {
     if (g_settings.heap_file && !g_vk.mem_fd)  // (the setting on where it can't be: said, not silent - #249)
         LOG("[vk] game memory through a shared file: on in the settings, but this driver can't export its memory (no "
             "VK_KHR_external_memory_fd) - shader global memory through CPU copies\n");
-    if ((!g_vk.map_placed && !memfd) || getenv("LARECOMP_VK_NO_PLACED")) return NOT_PLACED();
+    LOG("[vk] heap placement: %llu MB, exported file %d, placed %d, mem_fd %d, dma-buf %d\n",
+        (unsigned long long)(size >> 20), (int)memfd, (int)g_vk.map_placed, (int)g_vk.mem_fd, (int)g_vk.mem_dmabuf);
+    if ((!g_vk.map_placed && !memfd) || getenv("LARECOMP_VK_NO_PLACED")) { LOG("[vk] heap placement: not attempted\n"); return NOT_PLACED(); }
     extern bool vk_turnip_heap_on(int setting);
-    if (memfd ? g_settings.gpu_heap == 0 : !vk_turnip_heap_on(g_settings.gpu_heap)) {
+    if (memfd ? (g_settings.gpu_heap == 0 && !getenv("LARECOMP_VK_MEMFD")) : !vk_turnip_heap_on(g_settings.gpu_heap)) {
         // (the start screen's Driver compatibility: Automatic is on wherever Turnip places it - vulkan/device.c)
         extern bool vk_adreno_8xx(const char *name), vk_driver_is_turnip(void);
         LOG("[vk] guest heap as GPU memory: off (%s) - shader global memory through CPU copies\n",
@@ -5720,6 +5821,12 @@ bool vk_heap_place(uint64_t size) {
             (unsigned long long)(size >> 20), (unsigned long long)align);
         return NOT_PLACED();
     }
+#if defined(__linux__) && !defined(__ANDROID__)
+    if (memfd && !getenv("LARECOMP_VK_NO_UDMABUF")) {
+        if (vk_heap_udmabuf(size)) return true;
+        LOG("[vk] heap placement: udmabuf path failed, trying the driver's exported file\n");
+    }
+#endif
     VkExternalMemoryBufferCreateInfo ebi = {.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO,
                                             .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT};
     VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .pNext = memfd ? &ebi : NULL, .size = size,
@@ -5813,6 +5920,7 @@ bool vk_heap_place(uint64_t size) {
     gmem_size = size;
     gmem_placed = true;
     gcopy_mode = false;
+    memset(p, 0, size);  // (the exported file is not guaranteed zeroed; the game expects a fresh, zeroed heap)
     gwin_mode = size > g_vk.props.limits.maxStorageBufferRange && !getenv("LARECOMP_VK_NO_GWIN");
     LOG("[vk] guest heap %llu MB is GPU memory (%s at %llx, memory type %d, flags 0x%x, storage range %llu MB)%s\n",
         (unsigned long long)(size >> 20), !memfd ? "placed" : ht == VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT ? "a dma-buf mapped" : "an exported file mapped", (unsigned long long)HEAP_BASE, type,
