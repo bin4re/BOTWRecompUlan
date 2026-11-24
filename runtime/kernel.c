@@ -291,9 +291,7 @@ static pthread_once_t c0_once = PTHREAD_ONCE_INIT;
 static void core0_init(void) {
     c0_on = !getenv("LARECOMP_NO_CORE0");
     const char *cl = getenv("LARECOMP_CORE_LOCKS");
-    extern __attribute__((weak)) bool settings_core_turns(void);  // (settings.c; absent in the tests)
     if (cl && *cl) core_locks = (unsigned)strtoul(cl, NULL, 0) & 0xF;
-    else if (settings_core_turns && settings_core_turns()) core_locks = 7;  // (Settings > Switch-style core turns)
     if (!c0_on) core_locks = 0;
     if (core_locks != 1) LOG("[kernel] threads take turns on cores (mask) %#x (LARECOMP_CORE_LOCKS)\n", core_locks);
     const char *e = getenv("LARECOMP_C0_SLICE_MS");
@@ -695,8 +693,8 @@ static uint32_t block_current(int64_t timeout_ns) {
     struct timespec ts;
     if (timeout_ns >= 0) deadline(&ts, timeout_ns);
     waitlist_add(t);
-#ifdef __ANDROID__
     int kind0 = t->wait_kind;
+#ifdef __ANDROID__
     {   // LARECOMP_KWAIT_SPIN_US=<us>: a short wait first without sleeping (the kernel lock let go meanwhile) - the
         // main thread hands work to its job workers and waits for their results many times a frame, each wake-up a
         // futex and maybe a sleeping core brought back. A/B in one run (LARECOMP_AB=<n>:kspin), 1.9.0 with FSR 1 +
@@ -726,7 +724,7 @@ static uint32_t block_current(int64_t timeout_ns) {
         // and arbiter waits too: ArbitrateLock's caller then went on as if it held the lock (peanuts-native
         // hle_thread.c applies it to WaitSynchronization only, as here now))
         if (!kwait(timeout_ns, &ts)) {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__linux__) && !defined(__ANDROID__))
             // the wait ended while the timeout fired: a waker got there first (woken: wait_kind is NONE and the
             // loop ends with its result - a condition variable's thread may own the mutex by now) or moved it on
             // (a condition variable's thread signalled, now waiting for its mutex: no timeout for that part)
@@ -770,7 +768,7 @@ static uint32_t svc_arbitrate_unlock(uint64_t addr) {
 static uint32_t svc_wait_process_wide_key(uint64_t mutex, uint64_t key, uint32_t tag, int64_t timeout) {
     pthread_mutex_lock(&g_klock);
     KThread *t = t_cur;
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__linux__) && !defined(__ANDROID__))
     // the key says "waiters" before the mutex goes: once it's released, a thread that takes it, changes the state
     // and checks the key must see this waiter (else it skips the signal and the wakeup is lost)
     __atomic_store_n(u32p(key), 1, __ATOMIC_SEQ_CST);
@@ -1126,7 +1124,7 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
         heap_size = size;
         region_remove(HEAP_BASE);
         if (size) region_add(HEAP_BASE, size, 5, 3);
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || (defined(__linux__) && !defined(__ANDROID__))
         {   // the heap as GPU memory where the driver allows it (nvn/vulkan/exec.c vk_heap_place), before the game writes it
             extern bool vk_heap_place(uint64_t size);
             LOG("[kernel] SetHeapSize %llu MB\n", (unsigned long long)(size >> 20));
