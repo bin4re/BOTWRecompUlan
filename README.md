@@ -1,229 +1,169 @@
-# BOTWRecompAndroid
+# BOTWRecompUlan
 
-**English** | [Português](README.pt-BR.md)
+《塞尔达传说：旷野之息》的 **Linux / 幽兰本** 移植，基于
+[mamcjr/BOTWRecompAndroid](https://github.com/mamcjr/BOTWRecompAndroid) 的 fork。
 
-[![Listed on PlayPorted](https://playported.com/badge.svg)](https://playported.com/ports/754-the-legend-of-zelda-breath-of-the-wild/)
+这不是 Switch 模拟器：游戏代码被静态重编译成 C，再编译为原生 ARM64
+`botwgame.so`；游戏的 NVN 图形 API 由运行时翻译为 Vulkan。
 
-A port of *The Legend of Zelda: Breath of the Wild* (Nintendo Switch, versions **1.0.0, 1.6.0, 1.8.2 and 1.9.0**) for
-Android. This is **not Switch emulation**: the game code can be recompiled into C for the phone or, in the experimental
-Native Mode, run directly on its ARM64 CPU. The game's graphics API (NVN) is translated to Vulkan.
+目标机器是 **幽兰本（RK3588 / Mali-G610 MC4 / panthor / 6.12 vendor 内核）**。
+本仓库只包含移植代码和构建脚本，**不包含任何游戏文件**。
 
-It is built on the engine of **[LAS Recomp](https://github.com/peiikai/LASRecomp)** by peiikai (a recompilation of
-*Link's Awakening*) and its Android port, **[LASRecompAndroid](https://github.com/mamcjr/LASRecompAndroid)**.
+## 当前状态
 
-> [!WARNING]
-> **Beta.** Tested primarily on one phone (POCO F7 Ultra, Adreno 830, Mesa Turnip driver). Performance and compatibility
-> vary by device; expect bugs, especially on GPUs that have not been tested on physical hardware. See the
-> [0.4.11-beta release notes](https://github.com/mamcjr/BOTWRecompAndroid/releases/tag/v0.4.11-beta) and the
-> [development notes](docs/BOTW-PORT.md) (in Portuguese).
+- 在 6.12 vendor 内核上可以启动、进入游戏，并正常游玩一段时间；
+- **已知问题**：进入特定场景后 GPU 报 `CS fault`，运行时报 `vkWaitSemaphores: -4 (device lost)`
+  并退出。该问题在 6.12/7.3.3、不同 panthor/Mesa 组合下都能复现，尚未解决；
+- 系统自带的 **Mesa 26.0.8 运行本游戏不稳定**（`vkEndCommandBuffer -2`），默认 Mesa 27 运行。
 
-## Supported platform
+因此：能跑，但**不承诺稳定**；遇到固定场景崩溃属于已知问题。
 
-Android is the only application target. Desktop ports and packaging were discontinued on 2026-10-22.
-Windows, Linux or macOS may still be used as development hosts with the Android SDK/NDK.
+## 环境要求
 
-## Status
+- 幽兰本（RK3588，Mali-G610），16 GB 内存；
+- 6.12 vendor 内核，`/dev/dri` 下可用的 panthor 驱动，Wayland 桌面会话；
+- 约 30 GB 空闲磁盘（游戏数据 + 构建产物）；
+- `/dev/udmabuf`（默认启用零拷贝运行游戏，否则回退到拷贝模式运行会不稳定）。
 
-- **Playable** from the title screen into the world, with saves, on the tested POCO F7 Ultra. All four listed game
-  versions are supported in Recompiled Mode. Native Mode has been tested with 1.0.0 and 1.9.0; 1.6.0 and 1.8.2 still
-  need testing in that mode.
-- **Game code:** choose Recompiled Mode (build the code once on the phone) or experimental Native Mode (skip that
-  build). You can switch a Recompiled setup to Native Mode later.
-- **Game files:** copy the extracted files into app storage or, since **0.2.3-beta**, use them in place without an
-  additional copy of about 16 GB. In-place use requires Android all-files access and the source folder must remain
-  available.
-- **DLC, saves and mods:** install your own extracted Expansion Pass data; import and export saves as ZIP or import an
-  emulator save folder; use mods, including mods that add files and DLC mod folders. In-place mod use needs more testing.
-- **Video and controls:** optional 60 fps on supported game versions and experimental 60 fps in-engine cutscenes,
-  unlocked aspect ratio, internal/output resolution, FSR 1 or Snapdragon GSR 1 upscaling, FXAA/SMAA, touch controls,
-  physical controllers and gyro. The app offers a Vulkan driver selector and compatibility settings.
-- **Frame generation (LSFG), optional:** Lossless Scaling's frame generation with your own `Lossless.dll` (Lossless
-  Scaling for Windows, not included; put it in `Download/`, `LSFG/` or `Documents/Emulation/bios/`), 2x-4x, in Video. The
-  frame generation code is GPL-3.0-or-later, so **an APK built with it is GPL-3.0-or-later as a whole**: see
-  [NOTICE.md](NOTICE.md).
-- **0.3.0:** crashes and freezes after 30+ minutes on Mali GPUs, the fast travel's dissolve, stray leaves on the
-  ground, the stable's windows and the loading screens in unlocked aspect, a 40 / 45 fps frame rate, even 30 fps on
-  60 Hz screens, touch buttons for the arrows and the album, and two Driver compatibility options: the driver's own
-  variables, and game memory through a shared file for Mali and Xclipse (experimental).
-- **0.3.2:** fewer crashes with the Slate's camera, the red shadows on the Adreno 840 fixed, the unlocked-aspect HUD
-  without jumps after a pause, the scope with bars and the inventory without flicker, an option to keep the minimap
-  at the bottom with touch controls, and the aim steady when the phone turns round.
-- **0.3.3:** fewer crashes after long sessions on Mali, the black grass on Mali fixed, and less memory used on phones
-  with under 6 GB of RAM.
-- **0.3.4:** the low-RAM profile now activates automatically only on devices with up to 4 GB of RAM. Devices with 6 GB
-  return to the normal texture, buffer and cache settings; the manual override remains available.
-- **0.4.0:** optional frame generation (LSFG, with your own `Lossless.dll`), a new overlay (compact / detailed, with
-  charts), the frame rate no longer stuck lower after a menu or a save, and the pipeline limit on Xclipse and every
-  other non-Adreno GPU.
-- **0.4.1:** a faster low-RAM mode on 4 GB devices (Galaxy Tab A9+: ~5 to 11-15 fps in the world, without the
-  missing ground or the flickering menu letters), vibration on a controller's motors or the phone's, 30 fps while
-  the phone overheats, the game paused in the background, and 4:3 / 16:10 screens with bars instead of a squeezed
-  image.
-- **0.4.2:** faster on Turnip phones where the GPU waited on the CPU (Galaxy Tab A9+: ~15 to ~19 fps in the world),
-  RAM saving chosen in Video (Automatic / On / Off), and Auto output at 720p when RAM saving is on.
-- **0.4.3:** frame generation asks Android for the refresh rate its frames need (60 fps x 2: 120 Hz), so it works
-  on fast screens Android kept at 60 Hz; the menu says when no generated frame fits.
-- **0.4.4:** back at full speed right after a menu (~12 s slower after each one before), no long stays at 20 fps
-  after a hitch, frame generation on GPUs without null descriptors (Mali), and an Import Lossless.dll button.
-- **0.4.5:** shaders freed when the game restarts and, on Mali and other non-Adreno GPUs, after minutes unused
-  (#450); a lighter FXAA and FSR 1; Native Mode's clock right on MediaTek phones; the game's auxiliary audio and 3D
-  reverb (ports from TOTKDroid).
-- **0.4.6:** water that lost its collision after a while (#296), back at full speed 1 s after a load instead of
-  10 (#465), touch controls a fingerprint sensor hid (#477), no crash with the movies or the DLC's file missing or
-  damaged, safer locks in Native Mode on 1.0.0 / 1.6.0, bilinear filtering on Mali GPUs that lack it for some
-  formats, and optional pipeline prewarming.
-- **0.4.7:** the dark map and minimap with RAM saving on (#471 #478), a Video > Shadows option, Frame rate 40 / 45
-  from the screen's highest refresh rate, fewer shader stalls (urgent builds first, a translation cache), Mali
-  texture slots without stalls, and a freeze report in the log (#401).
-- **0.4.8:** fixes for game threads that could wait forever (timed waits survive a clock change, a cancelled wait
-  no longer looks like a taken lock), a freeze report that shows where the game's main thread is (#401), texture
-  slots without stalls on every GPU, and Mali compute work chained without extra barriers.
-- **0.4.9:** Settings > Switch-style core turns (experimental, off), for the freeze after a few minutes (#401);
-  a fuller freeze report; Unlocked aspect on screens squarer than 16:9 (#474); and Mali shader constants copied
-  only where they change.
-- **0.4.10:** a fix for the freeze after a few minutes on Mali and Qualcomm's stock driver (#401): what
-  shaders write goes back into the game's memory word by word, without undoing the game's own writes.
-- **0.4.11:** on an Adreno 6xx with 8 GB of RAM or less, Automatic leaves the game's memory off the GPU, so the
-  game no longer closes after a few minutes for lack of GPU memory (#520); a pipeline that fails for lack of memory
-  is created again instead of being lost.
-- **Known issues:** short grass appears only up close; water reflections can move with the camera; the pause menu
-  background can be black on Qualcomm's stock driver; Link may flicker on the first hit in Native Mode; rain falls
-  slower than on the console.
+## 方式一：使用预编译版（推荐给普通兰友）
 
-> [!IMPORTANT]
-> Like LAS Recomp, this project is made almost entirely with AI (Claude, by Anthropic, through Claude Code), directed,
-> tested and reviewed by a human.
+1. 从 [Releases](https://github.com/bin4re/BOTWRecompUlan/releases) 下载 Linux aarch64 压缩包并解压；
+2. 进入目录，首次运行 `./scripts/setup.sh`（创建 `tools/venv`，检查编译器）；
+3. 准备自己的游戏文件（见下一节）；
+4. 运行 `./run-botw.sh`，在启动器菜单里选择游戏目录，并点击构建游戏代码；
+5. 构建完成后即可进入游戏。
 
-> [!NOTE]
-> **No game files or DLC are included.** You need your own legally obtained, extracted game files (`exefs` and
-> `romfs`). The app does not open NSP/XCI files or use `prod.keys`. Instructions on obtaining game files are not
-> provided.
+Release 包只包含运行时、`tools/`、`gamelib-src/` 和脚本，**不包含**
+`v190/`、`botwgame.so`、`generated/` 或任何游戏资源。
 
-## Touch Controls Overhaul
+## 方式二：从源码构建
 
-Since **0.2.12-beta**, the touch controls show what each button does while you play in the world, with the game's own
-icons read from your game files. The game's menus keep the classic buttons.
+```sh
+git clone https://github.com/bin4re/BOTWRecompUlan
+cd BOTWRecompUlan
+./scripts/setup.sh --system        # 可选：安装构建依赖（需要 sudo）
+./scripts/setup.sh                 # 创建 tools/venv
 
-![Touch controls in the world](docs/images/touch-controls-overhaul.jpg)
+./scripts/build-mesa.sh            # 构建 Mesa 27 到 deps/（或解压预编译 Mesa 到 deps/）
 
-- **Your gear on the buttons:** attack, the bow and the shield show what you have equipped, and power shows the selected
-  rune (1.6.0, 1.8.2 and 1.9.0).
-- **Rune fan:** tap power to use the rune; hold it to open a fan of your runes and let go over the one you want.
-- **Gestures:**
-  - **Bow and throw:** hold and drag the same finger to aim (with motion controls on, move the phone instead); its sensitivity is in Controls.
-    While you hold them, a ✕ cancels the shot or the throw; with the bow drawn, an arrow button picks the arrows.
-  - **Parry:** slide the finger on the held shield.
-  - **Magnesis and the camera:** with Magnesis selected, a d-pad cross moves the object; with the camera rune, a − button
-    opens the album.
-  - **Camera:** drag anywhere on the right half.
-  - **Weapon and shield pickers:** hold, then choose with a second finger.
-  - **Shield surfing:** double-tap the shield and hold.
-- **Minimap at the top:** while the touch controls are on screen, the minimap, time, temperature and sensor move to the
-  top right corner. With a controller they stay in their usual place. Double-tap the minimap to open the map; the Sheikah Slate
-  button opens the scope.
-- **Your own layout:** in **Controls**, edit the action layout or the classic one. Drag the buttons, and select one to
-  make it bigger or smaller with **−** and **+**.
+# 游戏文件（以自己的 1.9.0 提取物为例）
+mkdir -p v190
+cp -r /path/to/extracted v190/
+echo 190 > game_version.txt
 
-![Rune fan](docs/images/touch-controls-overhaul-runes.jpg)
-
-## Installing (beta)
-
-1. Download the APK from [Releases](https://github.com/mamcjr/BOTWRecompAndroid/releases) and install it (Android 11+,
-   ARM64 and Vulkan). You need your own extracted game folder containing `exefs` and `romfs`.
-2. In **Game Files**, choose **Game code**: **Native (experimental)** skips the on-phone code build; **Recompiled**
-   builds it once. Under **Game files**, choose **Copy them** or **Use them in place**, then select the extracted folder.
-   In-place use asks for Android all-files access; keep that folder where it is. Copying needs roughly 16 GB more
-   storage for the game data, while Recompiled Mode also needs space for generated code.
-3. If you own the Expansion Pass, install its extracted DLC `romfs` through **Settings > DLC > Install DLC**. To bring
-   over saves, use **Settings > Saves** to import a ZIP or emulator save folder.
-4. On Adreno phones, a Mesa Turnip driver can perform better than the system driver. Select it under **Settings >
-   Files > Vulkan driver**. If the app reports that the Vulkan driver is too old at startup, long-press the app icon
-   and choose **Choose driver** before launching the game.
-
-Updating from 0.2.x to 0.4.11-beta does not require rebuilding game code. Shaders compile again once, so the first
-minutes may stutter. To report a problem, open an [issue](https://github.com/mamcjr/BOTWRecompAndroid/issues) with
-your phone, GPU, driver, game version and a log from **Settings > Files > Save a log file**.
-
-## Testing on Android (developers)
-
-With the Android SDK / NDK, a phone on adb and your dump in `Dump/`:
-
-```bash
-cd android/botwrecompandroid && ./gradlew assembleDebug    # the app
-android/build_gamelib.sh Dump/01007EF00011E000/exefs  # the game code (about an hour)
-android/push_game.sh Dump/01007EF00011E000           # game files and game code onto the phone
-android/run_boot.sh 120                               # start the game, log to android/out/boot.log
+make gen -j$(nproc)                # 生成 C 代码（耗时较长）
+make -j$(nproc)                    # 构建 build/botwrecomp 和 botwgame.so
+./run-botw.sh
 ```
 
-## Support the project
+如果只想先构建运行时、不生成游戏代码，也可以直接 `make -j$(nproc)`，
+之后在启动器菜单里构建游戏代码。
 
-BOTWRecompAndroid is a free, independent project. If you enjoy it and would like to support its development, you can
-sponsor me on GitHub, Ko-fi, Buy Me a Coffee or via **Pix**. Your support helps me dedicate time to fixing bugs, improving performance and compatibility, and
-working on future releases. Sponsorship is entirely optional: it does not unlock features or guarantee specific fixes.
-Bug reports, device tests, and contributions are also greatly appreciated.
+## 游戏文件
 
-Current goal: buy a **POCO X7 Pro ($455)**, a test device equipped with a MediaTek Dimensity SoC and Mali GPU to improve testing and optimize performance across all our ports (BOTWRecompAndroid, TOTKDroid, LASRecompAndroid, and Swap2-Native). The badge below shows total donations received across all platforms; I update it by hand.
+本仓库不提供、也不下载游戏文件。需要自备对应版本的游戏提取物：
 
-[![POCO X7 Pro goal](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmamcjr%2FBOTWRecompAndroid%2Fmain%2F.github%2Fdonation-goal.json&query=%24.raised&prefix=%24&color=2EA043&logo=xiaomi&logoColor=white&label=POCO%20X7%20Pro%20goal&suffix=%20%2F%20%24455)](https://github.com/mamcjr/BOTWRecompAndroid/blob/main/.github/donation-goal.json)
+| 游戏版本 | 数据目录 |
+|---|---|
+| 1.0.0 | `extracted/`（仓库根目录） |
+| 1.6.0 | `v160/extracted/` |
+| 1.8.2 | `v182/extracted/` |
+| 1.9.0 | `v190/extracted/` |
 
-[![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-on%20GitHub-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/mamcjr)
-[![Ko-fi](https://img.shields.io/badge/Ko--fi-mamcjr-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/mamcjr)
-[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-mamcjr-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/mamcjr)
-[![Pix](https://img.shields.io/badge/Pix-Random%20Key-32BCAD?logo=pix&logoColor=white)](#support-the-project)
+`game_version.txt` 记录当前版本（例如 `190`）。也可以在启动器菜单里选择/导入游戏目录，
+程序会自动创建对应的版本目录、存档和缓存。
 
-> **Pix (Brazil only — random key):** `6c326b56-6caf-4c3a-bcf7-1fa8ad2abd16`
+`v190/`、`generated/`、`game_version.txt` 都属于本地数据，已在 `.gitignore` 中忽略，
+**不要提交到仓库**。
 
-## Credits
+## Mesa 27
 
-- [peiikai](https://github.com/peiikai) for [LAS Recomp](https://github.com/peiikai/LASRecomp), the recompiler and
-  runtime this project starts from (MIT, see [LICENSE](LICENSE)). The original README is kept in [docs/las/](docs/las/).
-- [LASRecompAndroid](https://github.com/mamcjr/LASRecompAndroid), its Android port: the app, the phone-side game code
-  build, touch controls, mods, driver compatibility and the Portuguese menus.
-- [Revivedx](https://github.com/Revivedx) for [SavageWindRecomp](https://github.com/Revivedx/SavageWindRecomp) (MIT),
-  the reference for 1.8.2: frame pacing, internal resolution, the SDK 20 kernel fixes, setjmp.
-- [Nycolazs](https://github.com/Nycolazs) for LASRecomp-Android-Plus (MIT): Vulkan driver compatibility.
-- [ly05010419](https://github.com/ly05010419) for [MacNativeGames](https://github.com/ly05010419/MacNativeGames) (MIT),
-  whose fixes and notes for BOTW and TOTK pointed the way for several here: the sync lag (its PR #680), GPU results
-  the CPU reads back (PR #239), the terrain's height map texture (PR #511), texture layout, and the gyroscope's drift;
-  and for showing that the game's own ARM64 code can run directly (Native game code).
-- [OJZen](https://github.com/OJZen) for [totk-mobile](https://github.com/OJZen/totk-mobile), and
-  [jhaizhou-ops](https://github.com/jhaizhou-ops) for [d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile), the
-  core it builds on: what the native mode rewrites in the game's code (`svc`, the thread registers, the counter) and
-  how - the idea behind ours (no code taken).
-- The [zeldaret/botw](https://github.com/zeldaret/botw) decompilation and [open-ead/sead](https://github.com/open-ead/sead),
-  for what is known about the game's code.
-- Dusklight's launcher, the start screen's style.
-- Upscaling and anti-aliasing: [AMD FidelityFX FSR 1](https://github.com/GPUOpen-Effects/FidelityFX-FSR) (MIT),
-  [Qualcomm Snapdragon GSR](https://github.com/SnapdragonStudios/snapdragon-gsr) (BSD-3-Clause),
-  [SMAA](https://github.com/iryoku/smaa) (MIT).
-- Libraries: [SDL](https://libsdl.org) (zlib), [Dear ImGui](https://github.com/ocornut/imgui) (MIT),
-  [libadrenotools](https://github.com/bylaws/libadrenotools) (BSD-2-Clause), [volk](https://github.com/zeux/volk) (MIT),
-  [Vulkan Memory Allocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator) (MIT),
-  [shaderc](https://github.com/google/shaderc) (Apache 2.0), [FFmpeg](https://ffmpeg.org) (LGPL),
-  [LZ4](https://github.com/lz4/lz4) (BSD-2-Clause), [Capstone](https://www.capstone-engine.org) (BSD-3-Clause),
-  [Unicorn](https://www.unicorn-engine.org) (GPLv2, built from its source by `android/deps/build_unicorn.sh`),
-  [Python](https://www.python.org) (PSF) and [Zig](https://ziglang.org) (MIT) for the phone-side build.
-- [Mesa](https://www.mesa3d.org)'s Turnip driver (MIT), which players load themselves.
-- Fonts: [Baloo 2](https://github.com/EkType/Baloo2) (OFL), DejaVu Sans (Bitstream Vera license). The Android robot
-  is reproduced or modified from work created and shared by Google (CC BY 3.0).
-- Contributions through pull requests:
-  - [3122380113](https://github.com/3122380113): builds without FFmpeg again
-    ([#97](https://github.com/mamcjr/BOTWRecompAndroid/pull/97)); sound that came back silent after the app sat in the
-    background ([#96](https://github.com/mamcjr/BOTWRecompAndroid/pull/96)).
-  - [todwang96](https://github.com/todwang96): the GPU heap kept on for Adreno 7xx under Turnip, blank text otherwise
-    ([#103](https://github.com/mamcjr/BOTWRecompAndroid/pull/103)).
-  - [Ureta93](https://github.com/Ureta93): settings files saved with Windows line endings
-    ([#187](https://github.com/mamcjr/BOTWRecompAndroid/pull/187)).
-  - [Propinbo](https://github.com/Propinbo): Link breaking up into light again on a fast travel, instead of turning flat
-    blue and vanishing ([#210](https://github.com/mamcjr/BOTWRecompAndroid/pull/210)); 30 fps frames shown evenly on
-    60 Hz screens, no more 50 / 16.7 ms judder ([#183](https://github.com/mamcjr/BOTWRecompAndroid/pull/183)); no
-    validation errors from points and empty copies ([#255](https://github.com/mamcjr/BOTWRecompAndroid/pull/255)); a
-    built-in benchmark ([#278](https://github.com/mamcjr/BOTWRecompAndroid/pull/278)).
-  - [ilovz73ai-sketch](https://github.com/ilovz73ai-sketch): phone motion on a foldable's inner screen
-    ([#284](https://github.com/mamcjr/BOTWRecompAndroid/pull/284)).
-  - [3122380113](https://github.com/3122380113): the debug frame's three-finger tap with the touch controls hidden
-    ([#252](https://github.com/mamcjr/BOTWRecompAndroid/pull/252)).
-- Made with [Claude Code](https://claude.com/claude-code) (Anthropic).
+系统 Mesa 26.0.8 的 panvk 在 BOTW 上会触发 `vkEndCommandBuffer -2`，因此需要 Mesa 27：
 
-*The Legend of Zelda* and *Breath of the Wild* are trademarks of Nintendo. This project is not affiliated with or
-endorsed by Nintendo.
+- 预编译包：Release 自带 `deps/mesa/libvulkan_panfrost.so`，
+  `run-botw.sh` 首次运行会自动生成 `deps/mesa-icd/panfrost_devel.json`；
+- 或运行 `./scripts/build-mesa.sh`，脚本会拉取并构建固定版本的 Mesa 27，
+  输出到 `deps/mesa/`，并生成 ICD 描述文件。
+
+`run-botw.sh` 会自动使用 `deps/mesa-icd/panfrost_devel.json`；没有找到时退回系统驱动，
+但系统 Mesa 26 无法运行游戏。
+
+Mesa 构建依赖（脚本 `--system` 会安装）：
+
+```
+clang lld meson ninja-build pkg-config python3-mako
+llvm-21-dev libllvmspirvlib-21-dev
+libdrm-dev libwayland-dev libwayland-egl-backend-dev libdisplay-info-dev
+libshaderc-dev
+```
+
+## 零拷贝（建议默认开启）
+
+BOTW 的 guest heap 约 **3.1 GB**。不开零拷贝时走 CPU 拷贝路径，帧率明显下降，
+场景切换时也更容易卡顿/崩溃；建议把 memfd + udmabuf 零拷贝作为默认配置。
+
+### 检查
+
+```sh
+ls -l /dev/udmabuf
+cat /sys/module/udmabuf/parameters/size_limit_mb   # 需要 >= 4096
+```
+
+### 开启
+
+6.12 vendor 内核默认是 `# CONFIG_UDMABUF is not set`，需要重新配置内核：
+
+- `CONFIG_DMA_SHARED_BUFFER=y`
+- `CONFIG_MEMFD_CREATE=y`
+- `CONFIG_UDMABUF=y`（6.12 上游是 `bool`，只能内建；如果内核树已改成
+  `tristate`，也可以 `=m` 后 `modprobe udmabuf`）
+
+改完重新编译/安装内核（或模块），重启。
+
+BOTW 需要约 3.1 GB 的 udmabuf 上限：
+
+- 内建：启动参数加 `udmabuf.size_limit_mb=4096`；
+- 模块：`/etc/modprobe.d/udmabuf.conf` 写
+  `options udmabuf size_limit_mb=4096`；
+- 权限：`/dev/udmabuf` 默认 `root:kvm 660`，可加 udev 规则
+  `KERNEL=="udmabuf", MODE="0666"`，或把当前用户加入 `kvm` 组。
+
+### 验证
+
+启动日志里应看到：
+
+```
+[vk] udmabuf heap: type 0
+[vk] guest heap 3120 MB is GPU memory (memfd+udmabuf ...)
+```
+
+`run-botw.sh` 检测到 `/dev/udmabuf` 会自动设置 `LARECOMP_VK_MEMFD=1`。
+没有时回退到 `LARECOMP_VK_MEMFD=0` 拷贝模式，只建议临时排查，不建议日常使用。
+
+## 已知问题
+
+- 特定场景的 GPU `CS fault`（见上），目前无解；
+- 首次启动/首次进入新区域需要编译 shader，会明显卡顿；
+- 首次 `make gen` / 菜单构建游戏代码耗时较长，需要足够内存和磁盘；
+- SSH 会话里直接启动会报 `SDL_Vulkan_CreateSurface: Vulkan can't find any displays`，
+  请在幽兰本桌面会话中运行。
+
+## 目录说明
+
+```
+runtime/       移植后的运行时源码
+tools/         游戏代码生成器（Python）
+scripts/       setup.sh / build-mesa.sh
+deps/          Mesa 27 和 ICD（本地生成，已忽略）
+build/         运行时和游戏库构建产物（已忽略）
+v190/          玩家数据目录（已忽略）
+generated/     生成的重编译 C 代码（已忽略）
+```
+
+更详细的构建说明见 [docs/linux.md](docs/linux.md)。
+
+## 致谢与许可
+
+- 上游：[BOTWRecompAndroid](https://github.com/mamcjr/BOTWRecompAndroid)
+- 引擎：[LAS Recomp](https://github.com/peiikai/LASRecomp)
+- 本仓库遵循上游的 MIT 许可证，见 [LICENSE](LICENSE)。
